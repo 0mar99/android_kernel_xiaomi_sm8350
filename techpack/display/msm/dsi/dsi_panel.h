@@ -281,6 +281,7 @@ struct dsi_panel {
 	enum dsi_doze_mode_type doze_mode_requested;
 	bool aod_nolp_command_enabled;
 
+	u64 mi_panel_id;
 	bool fod_hbm_enabled;
 	bool fod_hbm_requested;
 	bool fod_ui;
@@ -388,6 +389,7 @@ int dsi_panel_mode_switch_to_cmd(struct dsi_panel *panel);
 int dsi_panel_mode_switch_to_vid(struct dsi_panel *panel);
 
 int dsi_panel_switch(struct dsi_panel *panel);
+int dsi_panel_gamma_switch(struct dsi_panel *panel);
 
 int dsi_panel_post_switch(struct dsi_panel *panel);
 

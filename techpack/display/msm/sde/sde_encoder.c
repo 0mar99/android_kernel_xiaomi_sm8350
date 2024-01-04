@@ -43,6 +43,8 @@
 #include "sde_hw_qdss.h"
 #include "sde_encoder_dce.h"
 #include "sde_vm.h"
+#include "dsi_drm.h"
+#include "dsi_display.h"
 
 #define SDE_DEBUG_ENC(e, fmt, ...) SDE_DEBUG("enc%d " fmt,\
 		(e) ? (e)->base.base.id : -1, ##__VA_ARGS__)
@@ -4265,6 +4267,9 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error,
 	struct sde_encoder_virt *sde_enc;
 	struct sde_encoder_phys *phys;
 	unsigned int i;
+	struct dsi_bridge *c_bridge = NULL;
+	struct dsi_display *dsi_display = NULL;
+	struct dsi_display_mode adj_mode;
 
 	if (!drm_enc) {
 		SDE_ERROR("invalid encoder\n");
@@ -4274,6 +4279,16 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error,
 	sde_enc = to_sde_encoder_virt(drm_enc);
 
 	SDE_DEBUG_ENC(sde_enc, "\n");
+
+	if (sde_enc->disp_info.intf_type == DRM_MODE_CONNECTOR_DSI && drm_enc->bridge) {
+		c_bridge = container_of(drm_enc->bridge, struct dsi_bridge, base);
+		if (c_bridge) {
+			dsi_display = c_bridge->display;
+			adj_mode = c_bridge->dsi_mode;
+		} else {
+			DSI_ERR("Failed to get valid dsi_bridge from drm_enc->bridge\n");
+		}
+	}
 
 	/* create a 'no pipes' commit to release buffers on errors */
 	if (is_error)
@@ -4300,6 +4315,13 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error,
 		phys = sde_enc->phys_encs[i];
 		if (phys && phys->ops.handle_post_kickoff)
 			phys->ops.handle_post_kickoff(phys);
+	}
+
+	if (dsi_display && dsi_display->panel
+		&& sde_enc->disp_info.intf_type == DRM_MODE_CONNECTOR_DSI
+		&& (dsi_display->panel->mi_panel_id == 0x4D323000360200 || dsi_display->panel->mi_panel_id == 0x4D323000420D00)
+		&& adj_mode.dsi_mode_flags & DSI_MODE_FLAG_VRR) {
+		dsi_panel_gamma_switch(dsi_display->panel);
 	}
 
 	SDE_ATRACE_END("encoder_kickoff");
