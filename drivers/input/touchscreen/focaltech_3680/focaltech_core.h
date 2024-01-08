@@ -140,6 +140,8 @@ struct fts_ts_platform_data {
     u32 irq_gpio_flags;
     u32 reset_gpio;
     u32 reset_gpio_flags;
+    u32 avdd_gpio;
+    u32 avdd_gpio_flags;
     bool have_key;
     u32 key_number;
     u32 keys[FTS_MAX_KEYS];
@@ -215,6 +217,7 @@ struct fts_ts_data {
     bool suspended;
     bool fw_loading;
     bool irq_disabled;
+    bool irq_wake_enabled;
     bool power_disabled;
     bool glove_mode;
     bool cover_mode;
@@ -225,6 +228,8 @@ struct fts_ts_data {
     bool esd_support;
 
     bool gesture_support;   /* gesture enable or disable, default: disable */
+    bool gesture_support_enabled;   /* gesture enable or disable, default: disable */
+    bool display_blank;
     u8 gesture_bmode;       /*gesture buffer mode*/
 
     u8 old_point_id;
@@ -334,8 +339,8 @@ int fts_gesture_resume(struct fts_ts_data *ts_data);
 int fts_gesture_reg_write(u8 mask, bool enable);
 #ifdef FTS_TOUCHSCREEN_FOD
 int fts_fod_reg_write(u8 mask, bool enable);
-void fts_fod_recovery(void);
 #endif
+void fts_fod_recovery(void);
 
 /* Apk and functions */
 int fts_create_proc(struct fts_ts_data *ts_data);

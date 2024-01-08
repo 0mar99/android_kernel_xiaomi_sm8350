@@ -110,7 +110,7 @@ static ssize_t fts_gesture_show(
     mutex_lock(&ts_data->input_dev->mutex);
     fts_read_reg(FTS_REG_GESTURE_EN, &val);
     count = snprintf(buf, PAGE_SIZE, "Gesture Mode:%s\n",
-                     ts_data->gesture_support ? "On" : "Off");
+                     ts_data->gesture_support_enabled ? "On" : "Off");
     count += snprintf(buf + count, PAGE_SIZE, "Reg(0xD0)=%d\n", val);
     mutex_unlock(&ts_data->input_dev->mutex);
 
@@ -127,9 +127,11 @@ static ssize_t fts_gesture_store(
     if (FTS_SYSFS_ECHO_ON(buf)) {
         FTS_DEBUG("enable gesture");
         ts_data->gesture_support = ENABLE;
+        ts_data->gesture_support_enabled = ENABLE;
     } else if (FTS_SYSFS_ECHO_OFF(buf)) {
         FTS_DEBUG("disable gesture");
-        ts_data->gesture_support = DISABLE;
+        ts_data->gesture_support = ENABLE;
+        ts_data->gesture_support_enabled = DISABLE;
     }
     mutex_unlock(&ts_data->input_dev->mutex);
 
@@ -333,7 +335,12 @@ int fts_gesture_readdata(struct fts_ts_data *ts_data, u8 *touch_buf)
     struct input_dev *input_dev = ts_data->input_dev;
     struct fts_gesture_st *gesture = &fts_gesture_data;
 
-    if (!ts_data->gesture_support) {
+    /*if (!ts_data->gesture_support) {
+        FTS_ERROR("gesture no support");
+        return -EINVAL;
+    }*/
+
+    if (!ts_data->gesture_support_enabled && ts_data->display_blank) {
         FTS_ERROR("gesture no support");
         return -EINVAL;
     }
@@ -359,12 +366,19 @@ int fts_gesture_readdata(struct fts_ts_data *ts_data, u8 *touch_buf)
         return 1;
     }
     if (gesture->gesture_id == GESTURE_SINGLETAP && !(ts_data->gesture_status & 0x02)) {
+#ifdef FTS_TOUCHSCREEN_FOD
         if (ts_data->fod_status != -1 && ts_data->fod_status != 100 && ts_data->nonui_status == 0){
             FTS_INFO("FOD on support single tap");
         }else{
             FTS_INFO("single tap is not enabled!");
+            //return 1;
+        }
+#else
+        if (ts_data->nonui_status == 0){
+            FTS_INFO("single tap is not enabled!");
             return 1;
         }
+#endif
     }
     FTS_DEBUG("gesture_id=%x; DoubleClick:0x24  SingleTap:0x25",gesture->gesture_id);
 
@@ -393,15 +407,13 @@ void fts_gesture_recovery(struct fts_ts_data *ts_data)
         fts_write_reg(0xD7, 0xFF);
         fts_write_reg(0xD8, 0xFF);
         fts_write_reg(FTS_REG_GESTURE_EN, ENABLE);
-#ifdef FTS_TOUCHSCREEN_FOD
-        fts_fod_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
-#endif
+        fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
     }
 }
 
-void fts_fod_recovery()
+#ifdef FTS_TOUCHSCREEN_FOD
+void fts_fod_recovery(void)
 {
-    FTS_FUNC_ENTER();
     if (fts_data->suspended) {
         FTS_INFO("%s, tp is in suspend mode, write 0xD0 to 1", __func__);
         fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
@@ -444,6 +456,16 @@ int fts_fod_reg_write(u8 mask, bool enable)
         return 0;
     }
 }
+#else
+void fts_fod_recovery(void)
+{
+    FTS_FUNC_ENTER();
+    if (fts_data->suspended) {
+        FTS_INFO("%s, tp is in suspend mode, write 0xD0 to 1", __func__);
+        fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
+    }
+}
+#endif
 
 int fts_gesture_reg_write(u8 mask, bool enable)
 {
@@ -481,8 +503,12 @@ int fts_gesture_suspend(struct fts_ts_data *ts_data)
     u8 state = 0xFF;
 
     FTS_FUNC_ENTER();
-    if (enable_irq_wake(ts_data->irq)) {
-        FTS_DEBUG("enable_irq_wake(irq:%d) fail", ts_data->irq);
+    if ( !ts_data->irq_wake_enabled ) {
+        if (enable_irq_wake(ts_data->irq)) {
+            FTS_DEBUG("enable_irq_wake(irq:%d) fail", ts_data->irq);
+        } else {
+            ts_data->irq_wake_enabled = true;
+        }
     }
 
     for (i = 0; i < 5; i++) {
@@ -498,14 +524,12 @@ int fts_gesture_suspend(struct fts_ts_data *ts_data)
         if (state == ENABLE)
             break;
     }
-#ifdef FTS_TOUCHSCREEN_FOD
-    ret = fts_fod_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
+    ret = fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
     if (ret) {
         FTS_ERROR("[GESTURE]Enter into gesture(suspend) failed!\n");
         // fts_gesture_data.active = DISABLE;
         return -EIO;
     }
-#endif
 
     if (i >= 5)
         FTS_ERROR("make IC enter into gesture(suspend) fail,state:%x", state);
@@ -523,8 +547,12 @@ int fts_gesture_resume(struct fts_ts_data *ts_data)
     u8 state = 0xFF;
 
     FTS_FUNC_ENTER();
-    if (disable_irq_wake(ts_data->irq)) {
-        FTS_DEBUG("disable_irq_wake(irq:%d) fail", ts_data->irq);
+    if ( ts_data->irq_wake_enabled ) {
+        if (disable_irq_wake(ts_data->irq)) {
+            FTS_DEBUG("disable_irq_wake(irq:%d) fail", ts_data->irq);
+        } else {
+            ts_data->irq_wake_enabled = false;
+        }
     }
 
     for (i = 0; i < 5; i++) {
@@ -535,13 +563,11 @@ int fts_gesture_resume(struct fts_ts_data *ts_data)
             break;
     }
 
-#ifdef FTS_TOUCHSCREEN_FOD
-    ret = fts_fod_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, false);
+    ret = fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, false);
     if (ret) {
         FTS_ERROR("[GESTURE]resume from gesture(suspend) failed!\n");
         return -EIO;
     }
-#endif
 
     if (i >= 5)
         FTS_ERROR("make IC exit gesture(resume) fail,state:%x", state);

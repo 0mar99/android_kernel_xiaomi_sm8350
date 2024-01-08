@@ -190,7 +190,7 @@
  * show debug log info
  * enable it for debug, disable it for release
  */
-#define FTS_DEBUG_EN                            1
+#define FTS_DEBUG_EN                            0
 
 /*
  * Linux MultiTouch Protocol
@@ -278,7 +278,7 @@
  * You should rename fw to "focaltech_ts_fw_tianma", and push it into
  * etc/firmware or by customers
  */
-#define FTS_MODULE_NAME                         ""
+#define FTS_MODULE_NAME                         "m20"
 #define FTS_MODULE2_NAME                        ""
 #define FTS_MODULE3_NAME                        ""
 

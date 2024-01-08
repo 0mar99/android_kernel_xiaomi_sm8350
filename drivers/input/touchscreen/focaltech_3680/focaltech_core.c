@@ -70,7 +70,9 @@
 #define FTS_I2C_VTG_MIN_UV                  1800000
 #define FTS_I2C_VTG_MAX_UV                  1800000
 #endif
-#define TS_ID_DET (336+96)
+#define TS_ID_DET1 (336+96)
+#define TS_ID_DET2 (336+68)
+
 
 /*****************************************************************************
 * Global variable or extern global variabls/functions
@@ -176,6 +178,8 @@ int fts_reset_proc(int hdelayms)
         FTS_INFO("fod_status = %d\n",fts_data->fod_status);
         fts_fod_recovery();
     }
+#else
+    fts_fod_recovery();
 #endif
 
     return 0;
@@ -634,13 +638,16 @@ static int fts_input_report_b(struct fts_ts_data *ts_data, struct ts_event *even
 #if FTS_REPORT_PRESSURE_EN
             input_report_abs(input_dev, ABS_MT_PRESSURE, events[i].p);
 #endif
-            if (!ts_data->fod_finger_skip && ts_data->overlap_area == 100 && !ts_data->suspended){
+#ifdef FTS_TOUCHSCREEN_FOD
+            if (!ts_data->fod_finger_skip && ts_data->overlap_area == 100 &&  !ts_data->suspended){
                 /*be useful when panel has been resumed */
                 input_report_key(input_dev, BTN_INFO, 1);
                 FTS_INFO("Report_0x152 resume DOWN");
+                input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, ts_data->overlap_area);
+                input_report_abs(input_dev, ABS_MT_WIDTH_MINOR, ts_data->overlap_area);
             }
-            input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, ts_data->overlap_area);
-            input_report_abs(input_dev, ABS_MT_WIDTH_MINOR, ts_data->overlap_area);
+#endif
+
             input_report_abs(input_dev, ABS_MT_POSITION_X, events[i].x);
             input_report_abs(input_dev, ABS_MT_POSITION_Y, events[i].y);
 
@@ -854,6 +861,7 @@ static int fts_read_and_report_foddata(struct fts_ts_data *data)
             input_sync(data->input_dev);
             break;
         case 0x26:
+#ifdef FTS_TOUCHSCREEN_FOD
             x = (buf[4] << 8) | buf[5];
             y = (buf[6] << 8) | buf[7];
             z = buf[3];
@@ -862,7 +870,7 @@ static int fts_read_and_report_foddata(struct fts_ts_data *data)
             if (buf[8] == 0) {
                 mutex_lock(&data->report_mutex);
                 if (!data->fod_finger_skip) {
-                    data->overlap_area = 100;
+                    //data->overlap_area = 100;
                 }
                 if (data->old_point_id != buf[0]) {
                     if (data->old_point_id == 0xff)
@@ -888,7 +896,6 @@ static int fts_read_and_report_foddata(struct fts_ts_data *data)
                     mutex_unlock(&data->report_mutex);
                     return 0;
                 }
-
                 if (!data->fod_finger_skip && data->finger_in_fod) {
                     input_mt_slot(data->input_dev, buf[0]);
                     input_mt_report_slot_state(data->input_dev, MT_TOOL_FINGER, 1);
@@ -898,8 +905,8 @@ static int fts_read_and_report_foddata(struct fts_ts_data *data)
                     input_report_abs(data->input_dev, ABS_MT_POSITION_X, x);
                     input_report_abs(data->input_dev, ABS_MT_POSITION_Y, y);
                     input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, z);
-                    input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, data->overlap_area);
-                    input_report_abs(data->input_dev, ABS_MT_WIDTH_MINOR, data->overlap_area);
+                    //input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, data->overlap_area);
+                    //input_report_abs(data->input_dev, ABS_MT_WIDTH_MINOR, data->overlap_area);
                     input_report_abs(data->input_dev, ABS_MT_PRESSURE, z);
                     input_sync(data->input_dev);
                     FTS_INFO("Report_0x152 suspend DOWN report_area %d sucess for miui", data->overlap_area);
@@ -926,9 +933,12 @@ static int fts_read_and_report_foddata(struct fts_ts_data *data)
                 input_sync(data->input_dev);
                 mutex_unlock(&data->report_mutex);
             }
+#endif
             break;
         default:
+#ifdef FTS_TOUCHSCREEN_FOD
             data->overlap_area = 0;
+#endif
             if (data->suspended)
                 return 0;
             else
@@ -1201,6 +1211,8 @@ static irqreturn_t fts_irq_handler(int irq, void *data)
         }
     }
 #endif
+
+    pm_wakeup_event(ts_data->dev,500);
 
     ts_data->intr_jiffies = jiffies;
     fts_prc_queue_work(ts_data);
@@ -1481,7 +1493,7 @@ static int fts_power_source_ctrl(struct fts_ts_data *ts_data, int enable)
     if (enable) {
         if (ts_data->power_disabled) {
             FTS_DEBUG("regulator enable !");
-            gpio_direction_output(ts_data->pdata->reset_gpio, 0);
+            gpio_direction_output(ts_data->pdata->reset_gpio, 1);
             msleep(1);
             if (!IS_ERR_OR_NULL(ts_data->vcc_i2c)) {
                 ret = regulator_enable(ts_data->vcc_i2c);
@@ -1489,7 +1501,9 @@ static int fts_power_source_ctrl(struct fts_ts_data *ts_data, int enable)
                     FTS_ERROR("enable vcc_i2c regulator failed,ret=%d", ret);
                 }
             }
-            msleep(1);
+            msleep(3);
+            gpio_direction_output(ts_data->pdata->avdd_gpio, 1);
+            msleep(3);
             ret = regulator_enable(ts_data->vdd);
             if (ret) {
                 FTS_ERROR("enable vdd regulator failed,ret=%d", ret);
@@ -1501,7 +1515,9 @@ static int fts_power_source_ctrl(struct fts_ts_data *ts_data, int enable)
         if (!ts_data->power_disabled) {
             FTS_DEBUG("regulator disable !");
             gpio_direction_output(ts_data->pdata->reset_gpio, 0);
-            msleep(1);
+            msleep(3);
+            gpio_direction_output(ts_data->pdata->avdd_gpio, 0);
+            msleep(3);
             ret = regulator_disable(ts_data->vdd);
             if (ret) {
                 FTS_ERROR("disable vdd regulator failed,ret=%d", ret);
@@ -1666,9 +1682,20 @@ static int fts_gpio_configure(struct fts_ts_data *data)
         }
     }
 
+    if (gpio_is_valid(data->pdata->avdd_gpio)) {
+        ret = gpio_request(data->pdata->avdd_gpio, "fts_avdd_gpio");
+        if (ret) {
+            FTS_ERROR("[GPIO]avdd gpio request failed");
+            goto err_reset_gpio_dir;
+        }
+    }
+
     FTS_FUNC_EXIT();
     return 0;
 
+err_reset_gpio_dir:
+    if (gpio_is_valid(data->pdata->reset_gpio))
+        gpio_free(data->pdata->reset_gpio);
 err_irq_gpio_dir:
     if (gpio_is_valid(data->pdata->irq_gpio))
         gpio_free(data->pdata->irq_gpio);
@@ -1771,6 +1798,11 @@ static int fts_parse_dt(struct device *dev, struct fts_ts_platform_data *pdata)
     if (pdata->reset_gpio < 0)
         FTS_ERROR("Unable to get reset_gpio");
 
+    pdata->avdd_gpio = of_get_named_gpio_flags(np, "focaltech,avdd-gpio",
+                        0, &pdata->avdd_gpio_flags);
+    if (pdata->avdd_gpio < 0)
+        FTS_ERROR("Unable to get avdd_gpio");
+
     pdata->irq_gpio = of_get_named_gpio_flags(np, "focaltech,irq-gpio",
                       0, &pdata->irq_gpio_flags);
     if (pdata->irq_gpio < 0)
@@ -1789,8 +1821,8 @@ static int fts_parse_dt(struct device *dev, struct fts_ts_platform_data *pdata)
             pdata->max_touch_number = temp_val;
     }
 
-    FTS_INFO("max touch number:%d, irq gpio:%d, reset gpio:%d",
-             pdata->max_touch_number, pdata->irq_gpio, pdata->reset_gpio);
+    FTS_INFO("max touch number:%d, irq gpio:%d, reset gpio:%d, avdd gpio:%d",
+             pdata->max_touch_number, pdata->irq_gpio, pdata->reset_gpio, pdata->avdd_gpio);
 
     FTS_FUNC_EXIT();
     return 0;
@@ -1900,12 +1932,14 @@ static int fb_notifier_callback(struct notifier_block *self,
         if (FB_EARLY_EVENT_BLANK == event) {
             FTS_INFO("resume: event = %lu, not care\n", event);
         } else if (FB_EVENT_BLANK == event) {
+            fts_data->display_blank = 0;
             queue_work(fts_data->ts_workqueue, &fts_data->resume_work);
         }
         break;
     case FB_BLANK_POWERDOWN:
         if (FB_EARLY_EVENT_BLANK == event) {
             cancel_work_sync(&fts_data->resume_work);
+            fts_data->display_blank = 1;
             fts_ts_suspend(ts_data->dev);
         } else if (FB_EVENT_BLANK == event) {
             FTS_INFO("suspend: event = %lu, not care\n", event);
@@ -1965,16 +1999,20 @@ static int drm_notifier_callback(struct notifier_block *self, unsigned long even
 
         if (event == MI_DISP_DPMS_EARLY_EVENT && (blank == MI_DISP_DPMS_POWERDOWN || blank == MI_DISP_DPMS_LP1 || blank == MI_DISP_DPMS_LP2)) {
             FTS_INFO("FTS do suspend work by event %s\n", blank == MI_DISP_DPMS_POWERDOWN ? "power down":"LP");
+#ifdef FTS_TOUCHSCREEN_FOD
             if(blank == MI_DISP_DPMS_POWERDOWN && fts_data->finger_in_fod){
                 FTS_INFO("drm_notifier_callback:fod_status = %d\n", fts_data->fod_status);
                 if(fts_data->fod_status != -1 && fts_data->fod_status != 100){
                     FTS_INFO("set fod finger skip true\n");
-                    fts_data->fod_finger_skip = true;
+                    //fts_data->fod_finger_skip = true;
                 }
             }
+#endif
+            fts_data->display_blank = 1;
             queue_work(fts_data->ts_workqueue, &fts_data->suspend_work);
         }else if(event == MI_DISP_DPMS_EVENT && blank == MI_DISP_DPMS_ON){
             FTS_INFO("FTS do resume work\n");
+            fts_data->display_blank = 0;
             queue_work(fts_data->ts_workqueue, &fts_data->resume_work);
         }
     }
@@ -2007,12 +2045,14 @@ static int drm_notifier_callback(struct notifier_block *self,
         if (MSM_DRM_EARLY_EVENT_BLANK == event) {
             FTS_INFO("resume: event = %lu, not care\n", event);
         } else if (MSM_DRM_EVENT_BLANK == event) {
+            fts_data->display_blank = 0;
             queue_work(fts_data->ts_workqueue, &fts_data->resume_work);
         }
         break;
     case MSM_DRM_BLANK_POWERDOWN:
         if (MSM_DRM_EARLY_EVENT_BLANK == event) {
             cancel_work_sync(&fts_data->resume_work);
+            fts_data->display_blank = 1;
             fts_ts_suspend(ts_data->dev);
         } else if (MSM_DRM_EVENT_BLANK == event) {
             FTS_INFO("suspend: event = %lu, not care\n", event);
@@ -2084,7 +2124,6 @@ static DEVICE_ATTR(fod_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL, fts_fod_test_s
 static struct xiaomi_touch_interface xiaomi_touch_interfaces;
 static void fts_update_gesture_state(struct fts_ts_data *ts_data, int bit, bool enable)
 {
-
     if (ts_data->suspended) {
         FTS_ERROR("TP is suspended, do not update gesture state");
         return;
@@ -2097,7 +2136,8 @@ static void fts_update_gesture_state(struct fts_ts_data *ts_data, int bit, bool 
         ts_data->gesture_status &= ~(1 << bit);
     }
     FTS_INFO("AOD: %d DoubleClick: %d ",ts_data->gesture_status>>1 & 0x01, ts_data->gesture_status & 0x01);
-    ts_data->gesture_support = ts_data->gesture_status != 0 ? ENABLE : DISABLE;
+    ts_data->gesture_support_enabled = ts_data->gesture_status != 0 ? ENABLE : DISABLE;
+    ts_data->gesture_support = ENABLE; // ts_data->gesture_status != 0 ? ENABLE : DISABLE;
     mutex_unlock(&ts_data->input_dev->mutex);
 }
 
@@ -2107,7 +2147,7 @@ static void fts_restore_mode_value(int mode, int value_type)
         xiaomi_touch_interfaces.touch_mode[mode][value_type];
 }
 
-static void fts_restore_normal_mode()
+static void fts_restore_normal_mode(void)
 {
     int i;
 
@@ -2218,6 +2258,7 @@ static int fts_set_cur_value(int mode, int value)
         return 0;
     }
 
+#ifdef FTS_TOUCHSCREEN_FOD
     if (mode == Touch_Fod_Enable && value >=0){
         FTS_INFO("Mode:FOD  fod_status = %d",value);
         fts_data->fod_status = value;
@@ -2229,6 +2270,7 @@ static int fts_set_cur_value(int mode, int value)
         }
         return 0;
     }
+#endif
 
     if (mode == Touch_Nonui_Mode && value >=0){
         FTS_INFO("Mode:Nonui_Mode  nonui_status = %d",value);
@@ -2629,20 +2671,28 @@ static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
     if (ts_data->fts_tp_class == NULL) {
 #ifdef FTS_XIAOMI_TOUCHFEATURE
         ts_data->fts_tp_class = get_xiaomi_touch_class();
+        if (ts_data->fts_tp_class == NULL ) {
+            FTS_ERROR("Failed to create xiaomi device. fallback to regular touch\n");
+            ts_data->fts_tp_class = class_create(THIS_MODULE, "touch");
+        }
 #else
         ts_data->fts_tp_class = class_create(THIS_MODULE, "touch");
 #endif
-    if (ts_data->fts_tp_class) {
+        if (ts_data->fts_tp_class) {
             ts_data->fts_touch_dev = device_create(ts_data->fts_tp_class, NULL, 0x38, ts_data, "tp_dev");
             if (IS_ERR(ts_data->fts_touch_dev)) {
                 FTS_ERROR("Failed to create device !\n");
                 goto err_class_create;
             }
             dev_set_drvdata(ts_data->fts_touch_dev, ts_data);
+#ifdef FTS_TOUCHSCREEN_FOD
             if (sysfs_create_file(&ts_data->fts_touch_dev->kobj, &dev_attr_fod_test.attr)) {
                 FTS_ERROR("Failed to create fod_test sysfs group!\n");
                 goto err_class_create;
             }
+#endif
+        } else {
+            FTS_ERROR("Failed to create device. ts_data->fts_tp_class = null !\n");
         }
     }
 
@@ -2685,6 +2735,9 @@ static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
     register_early_suspend(&ts_data->early_suspend);
 #endif
 
+    fts_data->gesture_support = 1;
+    device_init_wakeup(ts_data->dev, 1);
+
     fts_init_xiaomi_touchfeature(ts_data);
     FTS_FUNC_EXIT();
     return 0;
@@ -2699,6 +2752,8 @@ err_power_init:
 #endif
     if (gpio_is_valid(ts_data->pdata->reset_gpio))
         gpio_free(ts_data->pdata->reset_gpio);
+    if (gpio_is_valid(ts_data->pdata->avdd_gpio))
+        gpio_free(ts_data->pdata->avdd_gpio);
     if (gpio_is_valid(ts_data->pdata->irq_gpio))
         gpio_free(ts_data->pdata->irq_gpio);
 err_gpio_config:
@@ -2772,6 +2827,9 @@ static int fts_ts_remove_entry(struct fts_ts_data *ts_data)
     if (gpio_is_valid(ts_data->pdata->reset_gpio))
         gpio_free(ts_data->pdata->reset_gpio);
 
+    if (gpio_is_valid(ts_data->pdata->avdd_gpio))
+        gpio_free(ts_data->pdata->avdd_gpio);
+
     if (gpio_is_valid(ts_data->pdata->irq_gpio))
         gpio_free(ts_data->pdata->irq_gpio);
 
@@ -2815,20 +2873,21 @@ static int fts_ts_suspend(struct device *dev)
     if ((ts_data->fod_status == -1 || ts_data->fod_status == 100)){
         FTS_INFO("clear CF reg");
          ret = fts_fod_reg_write(FTS_REG_GESTURE_FOD_ON, false);
-        if (ret < 0){
+        if (ret < 0) {
             FTS_ERROR("%s fts_fod_reg_write failed\n", __func__);
         }
     }
 
     if ((ts_data->fod_status != -1 && ts_data->fod_status != 100)){
         ret = fts_fod_reg_write(FTS_REG_GESTURE_FOD_ON, true);
-        if (ret < 0){
+        if (ret < 0) {
             FTS_ERROR("%s fts_fod_reg_write failed\n", __func__);
         }
-        fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
-        if (ret < 0){
-            FTS_ERROR("%s fts_fod_reg_write failed\n", __func__);
-        }
+    }
+#else
+    fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, true);
+    if (ret < 0) {
+        FTS_ERROR("%s fts_gesture_reg_write failed\n", __func__);
     }
 #endif
 
@@ -2837,9 +2896,9 @@ static int fts_ts_suspend(struct device *dev)
     ts_data->poweroff_on_sleep = true;
 #endif
     FTS_INFO("fts_ts_suspend gesture_support:%d  poweroff_on_sleep:%d ",ts_data->gesture_support,ts_data->poweroff_on_sleep);
-    if (ts_data->gesture_support && !ts_data->poweroff_on_sleep) {
+    if ( ts_data->gesture_support && !ts_data->poweroff_on_sleep ) {
         fts_gesture_suspend(ts_data);
-    } else{
+    } else {
         FTS_INFO("make TP enter into sleep mode");
         ret = fts_write_reg(FTS_REG_POWER_MODE, FTS_REG_POWER_MODE_SLEEP);
         if (ret < 0)
@@ -2899,9 +2958,7 @@ static int fts_ts_resume(struct device *dev)
         fts_gesture_resume(ts_data);
     }
     ts_data->poweroff_on_sleep = false;
-#ifdef FTS_TOUCHSCREEN_FOD
     fts_gesture_reg_write(FTS_REG_GESTURE_DOUBLETAP_ON, false);
-#endif
     FTS_FUNC_EXIT();
     return 0;
 }
@@ -2912,6 +2969,14 @@ static int fts_pm_suspend(struct device *dev)
     struct fts_ts_data *ts_data = dev_get_drvdata(dev);
 
     FTS_INFO("system enters into pm_suspend");
+    if (device_may_wakeup(dev) && ts_data->irq_wake_enabled) {
+		if( enable_irq_wake(ts_data->irq) ) {
+            FTS_DEBUG("enable_irq_wake(irq:%d) fail (pm_suspend)", ts_data->irq);
+        } else {
+            ts_data->irq_wake_enabled = true;
+        }
+	}
+
     ts_data->pm_suspend = true;
     reinit_completion(&ts_data->pm_completion);
     return 0;
@@ -2922,6 +2987,14 @@ static int fts_pm_resume(struct device *dev)
     struct fts_ts_data *ts_data = dev_get_drvdata(dev);
 
     FTS_INFO("system resumes from pm_suspend");
+    if (device_may_wakeup(dev) && ts_data->irq_wake_enabled) {
+		if( disable_irq_wake(ts_data->irq) ) {
+            FTS_DEBUG("disable_irq_wake(irq:%d) fail (pm_suspend)", ts_data->irq);
+        } else {
+            ts_data->irq_wake_enabled = false;
+        }
+	}
+
     ts_data->pm_suspend = false;
     complete(&ts_data->pm_completion);
     return 0;
@@ -2941,7 +3014,7 @@ static int fts_ts_probe(struct spi_device *spi)
     int ret = 0;
     struct fts_ts_data *ts_data = NULL;
 
-    FTS_INFO("Touch Screen(SPI BUS) driver prboe...");
+    FTS_INFO("Touch Screen(SPI BUS) driver probe...");
 #if (FTS_CHIP_TYPE == _FT8719) || (FTS_CHIP_TYPE == _FT8615) || (FTS_CHIP_TYPE == _FT8006P) || (FTS_CHIP_TYPE == _FT7120)
     spi->mode = SPI_MODE_1;
 #else
@@ -2991,6 +3064,7 @@ static const struct spi_device_id fts_ts_id[] = {
 };
 static const struct of_device_id fts_dt_match[] = {
     {.compatible = "xiaomi,ts-spi", },
+    {.compatible = "xiaomi,m20-spi", },
     {},
 };
 MODULE_DEVICE_TABLE(of, fts_dt_match);
@@ -3012,15 +3086,19 @@ static struct spi_driver fts_ts_driver = {
 static int __init fts_ts_init(void)
 {
     int ret = 0;
-    int gpio_96;
-    gpio_direction_input(TS_ID_DET);
-    gpio_96 = gpio_get_value(TS_ID_DET);
-    FTS_INFO("gpio_96 = %d \n",gpio_96);
-    if(gpio_96){
+    int gpio_96, gpio_68;
+    gpio_direction_input(TS_ID_DET1);
+    gpio_direction_input(TS_ID_DET2);
+    gpio_96 = gpio_get_value(TS_ID_DET1);
+    gpio_68 = gpio_get_value(TS_ID_DET2);
+    FTS_INFO("gpio_96 = %d\n",gpio_96);
+    FTS_INFO("gpio_68 = %d\n",gpio_68);
+
+    if(gpio_96 == 1 && gpio_68 == 0 ){
+        FTS_INFO("TP is focaltech\n");
+    } else {
         FTS_INFO("TP is goodix\n");
         return 0;
-    }else{
-        FTS_INFO("TP is focaltech\n");
     }
 
     FTS_FUNC_ENTER();

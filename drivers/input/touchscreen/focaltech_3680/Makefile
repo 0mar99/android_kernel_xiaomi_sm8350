@@ -1,7 +1,7 @@
 # Makefile for the focaltech touchscreen drivers.
 
 ifneq ($(KERNELRELEASE),)
-    obj-m += focaltech_touch.o
+    obj-$(CONFIG_TOUCHSCREEN_FOCALTECH_3680) += focaltech_touch.o
 focaltech_touch-y := \
     focaltech_core.o \
     focaltech_ex_fun.o \
