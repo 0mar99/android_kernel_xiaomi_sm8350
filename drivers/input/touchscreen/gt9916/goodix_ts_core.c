@@ -3531,7 +3531,13 @@ static int __init goodix_ts_core_init(void)
 	gpio_68 = gpio_get_value(TS_ID_DET2);
 	pr_info("gpio_96 = %d\n",gpio_96);
 	pr_info("gpio_68 = %d\n",gpio_68);
-	pr_info("TP is goodix");
+
+	if(gpio_96 == 0 && gpio_68 == 1 ){
+		pr_info("TP is goodix\n");
+	} else {
+		pr_info("TP is focaltech\n");
+		return 0;
+	}
 
 	pr_info("Core layer init:%s", GOODIX_DRIVER_VERSION);
 #ifdef CONFIG_TOUCHSCREEN_GOODIX_BRL_SPI
